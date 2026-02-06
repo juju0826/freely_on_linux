@@ -1,7 +1,9 @@
 # freely_on_linux 
+
 在Linux裡自由自在
 Running free software on Linux in a way that is stable, predictable, and sustainable.
 在 Linux 上，將自由軟體組裝成一個可以長期、安心運作的系統。
+
 ---
 ## 這個 repository 在做什麼？
 這個 repository 記錄的是一條實際走過、並已在作業系統中長期運作的路線。
@@ -11,6 +13,7 @@ Running free software on Linux in a way that is stable, predictable, and sustain
 ## 記錄方式
 這個 repo 採取漸進式的記錄方式，腳本的每個指令都有說明。
 每一個被整理出來的經驗，都來自經過一段時間的驗證與實際運作。
+
 # .sh 腳本
 ## postinstall.sh
 灌好Linux後要先做的幾件事：
