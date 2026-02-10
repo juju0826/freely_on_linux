@@ -98,7 +98,7 @@ nnoremap <silent> <F5> :source $MYVIMRC<CR>:echo "vimrc reloaded"<CR>
 " set textwidth=0            " 不自動硬折行（程式碼/設定檔更安全）
 " set colorcolumn=80         " 80 欄提示（寫 code 有用，但會多一條線）
 
-" ---------- 最後：確保不使用相對行號（依你要求） ----------
+" ---------- 最後：確保不使用相對行號 ----------
 set norelativenumber
 
 " ============================================
