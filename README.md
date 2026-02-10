@@ -16,7 +16,9 @@ Running free software on Linux in a way that is stable, predictable, and sustain
 灌好Linux後要先做的幾件事：
 ✅ 把使用者名稱加入sudoers群組
 ✅ 安裝fcitx4架構的倉頡輸入法
-✅ 安裝文字編輯器vim並優化vim和終端機的功能及視覺效果
+✅ 安裝文字編輯器vim
 ✅ 安裝瀏覽器 brave
 ## .vimrc.sh
-✅ 優化後的文字處理器vim。腳本名稱前要加個點.變成隱藏檔，放在家目錄底下
+✅ 優化文字處理器vim。腳本名稱前要加個點.變成隱藏檔，放在家目錄底下
+## .bashrc.sh
+✅ 優化終端機的bash視覺效果。腳本名稱前要加個點.變成隱藏檔，放在家目錄底下
