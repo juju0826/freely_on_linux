@@ -27,3 +27,5 @@ Running free software on Linux in a way that is stable, predictable, and sustain
 🛠️ 先更新 Keychron K3 MAx 鍵盤韌體到最新再跑此 QMK 腳本，最後再跑 Keymap-K3 Max White-6-18-12.json 檔 ✅ 修改 K3 MAX 鍵盤的燈光邏輯，不論燈光模式如何，Enter鍵永遠是擴散波紋。當按下FN+CAPSLOCK=大寫字母時，燈光全開，亮度中亮。
 ## Keymap-K3 Max White-6-18-12.json
 ✅ 修改 Caps鍵 為 Esc鍵；將 Fn鍵 + Caps鍵 設為 Caps Lock 大寫字母
+## upload_to_r2.sh
+✅ 把音檔上傳至 Cloudflare R2 空間的腳本 詳情請見 (https://jujublog.idv.tw/posts/20251015r2/)
