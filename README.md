@@ -31,3 +31,7 @@ Running free software on Linux in a way that is stable, predictable, and sustain
 ✅ 修改鍵盤的燈光邏輯，適用於 Keychron 所有的 K MAX 系列 ✅ 自動偵測鍵盤型號, 自選鍵盤為 RGB 或白光, 生成燈光程式, 編譯, 手動 DFU 後刷入 QMK 詳情請見 (https://jujublog.idv.tw/posts/20260313qmk/)
 ## upload_to_r2.sh
 ✅ 把音檔上傳至 Cloudflare R2 空間的腳本 詳情請見 (https://jujublog.idv.tw/posts/20251015r2/)
+## cloudbak.sh
+✅ 備份 Nextcloud 的重要設定，包含線上編輯 Collabora。依日期備份檔名。
+## cloudbak-restore
+✅ 還原 Nextcloud 的重要設定。
