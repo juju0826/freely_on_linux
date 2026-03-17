@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# cloudbak
+#
+# Tailored backup script for this Nextcloud + Collabora host.
+#
+# What it backs up:
+#   - /etc/nginx/sites-available + sites-enabled
+#   - /var/www/nextcloud/config/config.php
+#   - Nextcloud database: nextcloud
+#   - Collabora container metadata
+#   - Selected operator scripts under /home/libengju
+#   - Nextcloud data directory snapshot: /var/www/nextcloud-data/ncdata
+#
+# Backup target:
+#   /var/www/nextcloud-data/cloudbak
+#
+# Notes:
+#   - This script auto-generates a timestamped snapshot directory.
+#   - It also refreshes a "latest" symlink.
+#   - It uses rsync --link-dest to make incremental snapshots when possible.
+#   - It re-execs itself with sudo when needed, so you can simply type:
+#         cloudbak
+#
+# Caveat:
+#   Because /var/www/nextcloud-data is already on the 1TB HDD, backing up
+#   ncdata into /var/www/nextcloud-data/cloudbak protects you from mistakes,
+#   bad updates, and accidental deletion, but NOT from total failure of that HDD.
+#   For true disaster recovery, keep one more copy on a different disk / machine.
+
+set -Eeuo pipefail
+
+if [[ "${EUID}" -ne 0 ]]; then
+  exec sudo "$0" "$@"
+fi
+
+BACKUP_ROOT="/var/www/nextcloud-data/cloudbak"
+NC_WEB_ROOT="/var/www/nextcloud"
+NC_CONFIG="/var/www/nextcloud/config/config.php"
+NC_DATA_DIR="/var/www/nextcloud-data/ncdata"
+NC_LOG_ROOT="/var/www/nextcloud-data"
+DB_NAME="nextcloud"
+DB_USER="ncuser"
+COLLABORA_CONTAINER="libengju-collabora"
+
+SCRIPT_FILES=(
+  "/home/libengju/collabora_watch.sh"
+  "/home/libengju/deploy_nc_collabora_office.sh"
+  "/home/libengju/docker-compose.yml"
+  "/home/libengju/install_collabora_fonts.sh"
+  "/home/libengju/nextcloud_diag.sh"
+  "/home/libengju/set_nextcloud.sh"
+)
+
+STAMP="$(date +%F_%H%M%S)"
+SNAPSHOT_DIR="${BACKUP_ROOT}/${STAMP}"
+LATEST_LINK="${BACKUP_ROOT}/latest"
+
+log() { printf '[cloudbak] %s\n' "$*"; }
+warn() { printf '[cloudbak][WARN] %s\n' "$*" >&2; }
+fail() { printf '[cloudbak][ERROR] %s\n' "$*" >&2; exit 1; }
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fail "Missing command: $1"
+}
+
+for cmd in rsync tar mysqldump docker findmnt df du readlink gzip; do
+  need_cmd "$cmd"
+done
+
+[[ -d "${NC_WEB_ROOT}" ]] || fail "Nextcloud web root not found: ${NC_WEB_ROOT}"
+[[ -f "${NC_CONFIG}" ]] || fail "Nextcloud config not found: ${NC_CONFIG}"
+[[ -d "${NC_DATA_DIR}" ]] || fail "Nextcloud data directory not found: ${NC_DATA_DIR}"
+
+mkdir -p "${SNAPSHOT_DIR}"/{configs,db,docker,scripts,meta,data}
+
+{
+  echo "cloudbak_snapshot=${STAMP}"
+  echo "backup_root=${BACKUP_ROOT}"
+  echo "nextcloud_web_root=${NC_WEB_ROOT}"
+  echo "nextcloud_config=${NC_CONFIG}"
+  echo "nextcloud_data_dir=${NC_DATA_DIR}"
+  echo "database_name=${DB_NAME}"
+  echo "database_user=${DB_USER}"
+  echo "collabora_container=${COLLABORA_CONTAINER}"
+  echo "hostname=$(hostname)"
+  echo "kernel=$(uname -r)"
+  echo "date=$(date --iso-8601=seconds)"
+  echo "mount_sdb1=$(findmnt -no TARGET,SOURCE,FSTYPE /dev/sdb1 2>/dev/null || true)"
+  echo "disk_usage_target=$(df -h /dev/sdb1 2>/dev/null | tail -n1 || true)"
+} > "${SNAPSHOT_DIR}/meta/SUMMARY.txt"
+
+log "Backing up nginx configuration"
+cp -a /etc/nginx/sites-available "${SNAPSHOT_DIR}/configs/"
+cp -a /etc/nginx/sites-enabled "${SNAPSHOT_DIR}/configs/"
+
+log "Backing up Nextcloud config"
+mkdir -p "${SNAPSHOT_DIR}/configs/nextcloud"
+cp -a "${NC_CONFIG}" "${SNAPSHOT_DIR}/configs/nextcloud/config.php"
+
+log "Backing up useful logs"
+mkdir -p "${SNAPSHOT_DIR}/meta/logs"
+for f in \
+  "${NC_LOG_ROOT}/nextcloud.log" \
+  "${NC_LOG_ROOT}/ncdata/nextcloud.log" \
+  "${NC_LOG_ROOT}/server-data/nextcloud.log"
+do
+  [[ -f "$f" ]] && cp -a "$f" "${SNAPSHOT_DIR}/meta/logs/"
+done
+
+log "Backing up selected operator scripts"
+for f in "${SCRIPT_FILES[@]}"; do
+  if [[ -f "$f" ]]; then
+    cp -a "$f" "${SNAPSHOT_DIR}/scripts/"
+  else
+    warn "Missing script, skipped: $f"
+  fi
+done
+
+log "Capturing docker metadata"
+docker ps -a > "${SNAPSHOT_DIR}/docker/docker-ps-a.txt" || true
+docker images > "${SNAPSHOT_DIR}/docker/docker-images.txt" || true
+docker inspect "${COLLABORA_CONTAINER}" > "${SNAPSHOT_DIR}/docker/${COLLABORA_CONTAINER}.inspect.json" 2>/dev/null || warn "Could not inspect ${COLLABORA_CONTAINER}"
+docker logs --tail 200 "${COLLABORA_CONTAINER}" > "${SNAPSHOT_DIR}/docker/${COLLABORA_CONTAINER}.last200.log" 2>/dev/null || warn "Could not read ${COLLABORA_CONTAINER} logs"
+
+log "Backing up database"
+if sudo mysql -e "USE ${DB_NAME};" >/dev/null 2>&1; then
+  mysqldump --single-transaction --quick --routines --triggers "${DB_NAME}" | gzip -c > "${SNAPSHOT_DIR}/db/${DB_NAME}.sql.gz"
+else
+  fail "MariaDB access failed. Cannot dump database ${DB_NAME}."
+fi
+
+log "Backing up data snapshot with incremental hardlinks when possible"
+LINK_DEST=""
+if [[ -L "${LATEST_LINK}" ]]; then
+  PREV_REAL="$(readlink -f "${LATEST_LINK}")"
+  if [[ -d "${PREV_REAL}/data/ncdata" ]]; then
+    LINK_DEST="--link-dest=${PREV_REAL}/data/ncdata"
+  fi
+fi
+
+if [[ -n "${LINK_DEST}" ]]; then
+  rsync -aHAX --numeric-ids ${LINK_DEST} "${NC_DATA_DIR}/" "${SNAPSHOT_DIR}/data/ncdata/"
+else
+  rsync -aHAX --numeric-ids "${NC_DATA_DIR}/" "${SNAPSHOT_DIR}/data/ncdata/"
+fi
+
+log "Recording size information"
+{
+  echo
+  echo "---- size report ----"
+  du -sh "${SNAPSHOT_DIR}/configs" 2>/dev/null || true
+  du -sh "${SNAPSHOT_DIR}/db" 2>/dev/null || true
+  du -sh "${SNAPSHOT_DIR}/docker" 2>/dev/null || true
+  du -sh "${SNAPSHOT_DIR}/scripts" 2>/dev/null || true
+  du -sh "${SNAPSHOT_DIR}/data/ncdata" 2>/dev/null || true
+  du -sh "${SNAPSHOT_DIR}" 2>/dev/null || true
+} >> "${SNAPSHOT_DIR}/meta/SUMMARY.txt"
+
+log "Refreshing latest symlink"
+ln -sfn "${SNAPSHOT_DIR}" "${LATEST_LINK}"
+
+log "Backup completed"
+echo
+echo "Snapshot created:"
+echo "  ${SNAPSHOT_DIR}"
+echo
+echo "Latest link:"
+echo "  ${LATEST_LINK}"
+echo
+echo "Important note:"
+echo "  This protects you from bad updates and accidental changes."
+echo "  It is NOT a full disaster backup against failure of /dev/sdb1,"
+echo "  because both live data and cloudbak live on the same 1TB disk."
+echo "  Keep one more copy on another disk or another machine if possible."

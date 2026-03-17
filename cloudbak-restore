@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# cloudbak-restore
+#
+# Restore helper for backups created by the tailored `cloudbak` script.
+#
+# What it restores:
+#   - nginx configuration
+#   - Nextcloud config.php
+#   - Nextcloud database dump
+#   - selected operator scripts
+#
+# Optional:
+#   - Nextcloud data snapshot restore (destructive; only if you explicitly choose it)
+#
+# Usage:
+#   cloudbak-restore
+#
+# Notes:
+#   - This script re-execs itself with sudo when needed.
+#   - It is intentionally interactive to reduce destructive mistakes.
+#   - Restoring database and data is powerful. Read prompts carefully.
+
+set -Eeuo pipefail
+
+if [[ "${EUID}" -ne 0 ]]; then
+  exec sudo "$0" "$@"
+fi
+
+BACKUP_ROOT="/var/www/nextcloud-data/cloudbak"
+LATEST_LINK="${BACKUP_ROOT}/latest"
+NC_WEB_ROOT="/var/www/nextcloud"
+NC_CONFIG="/var/www/nextcloud/config/config.php"
+NC_DATA_DIR="/var/www/nextcloud-data/ncdata"
+COLLABORA_CONTAINER="libengju-collabora"
+
+log(){ printf '[cloudbak-restore] %s\n' "$*"; }
+warn(){ printf '[cloudbak-restore][WARN] %s\n' "$*" >&2; }
+fail(){ printf '[cloudbak-restore][ERROR] %s\n' "$*" >&2; exit 1; }
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fail "Missing command: $1"
+}
+
+for cmd in mysql gunzip docker nginx find readlink systemctl rsync; do
+  need_cmd "$cmd"
+done
+
+[[ -d "$BACKUP_ROOT" ]] || fail "Backup root not found: $BACKUP_ROOT"
+
+choose_snapshot() {
+  echo
+  echo "Available snapshots:"
+  find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf "  %f\n" | sort
+  echo
+  read -r -p "Type snapshot name to restore, or press Enter to use latest: " SNAPSHOT_NAME
+  if [[ -z "$SNAPSHOT_NAME" ]]; then
+    [[ -L "$LATEST_LINK" ]] || fail "No latest symlink found."
+    SNAPSHOT_PATH="$(readlink -f "$LATEST_LINK")"
+  else
+    SNAPSHOT_PATH="${BACKUP_ROOT}/${SNAPSHOT_NAME}"
+  fi
+  [[ -d "$SNAPSHOT_PATH" ]] || fail "Snapshot not found: $SNAPSHOT_PATH"
+}
+
+confirm() {
+  local prompt="$1"
+  local ans=""
+  read -r -p "$prompt (y/n): " ans
+  [[ "$ans" == "y" ]]
+}
+
+restore_nginx() {
+  log "Restoring nginx config"
+  cp -a "${SNAPSHOT_PATH}/configs/sites-available" /etc/nginx/
+  cp -a "${SNAPSHOT_PATH}/configs/sites-enabled" /etc/nginx/
+  nginx -t
+  systemctl reload nginx
+}
+
+restore_nextcloud_config() {
+  log "Restoring Nextcloud config.php"
+  [[ -f "${SNAPSHOT_PATH}/configs/nextcloud/config.php" ]] || fail "config.php not found in snapshot"
+  cp -a "${SNAPSHOT_PATH}/configs/nextcloud/config.php" "$NC_CONFIG"
+  chown www-data:www-data "$NC_CONFIG"
+}
+
+restore_scripts() {
+  log "Restoring selected operator scripts into /home/libengju"
+  if [[ -d "${SNAPSHOT_PATH}/scripts" ]]; then
+    cp -a "${SNAPSHOT_PATH}/scripts/." /home/libengju/
+    chown libengju:libengju /home/libengju/*.sh /home/libengju/docker-compose.yml 2>/dev/null || true
+  else
+    warn "No scripts directory found in snapshot"
+  fi
+}
+
+restore_database() {
+  local dump=""
+  dump="$(find "${SNAPSHOT_PATH}/db" -maxdepth 1 -type f -name '*.sql.gz' | head -n1 || true)"
+  [[ -n "$dump" ]] || fail "No database dump found in ${SNAPSHOT_PATH}/db"
+  log "Restoring database from $(basename "$dump")"
+  gunzip -c "$dump" | mysql
+}
+
+restore_data() {
+  [[ -d "${SNAPSHOT_PATH}/data/ncdata" ]] || fail "No data snapshot found: ${SNAPSHOT_PATH}/data/ncdata"
+  warn "Data restore is destructive."
+  warn "Target directory: $NC_DATA_DIR"
+  if ! confirm "Proceed with replacing current ncdata with snapshot copy"; then
+    log "Skipped data restore"
+    return 0
+  fi
+
+  local backup_live="${NC_DATA_DIR}.pre-restore.$(date +%F_%H%M%S)"
+  log "Creating safety backup of current live ncdata at $backup_live"
+  mv "$NC_DATA_DIR" "$backup_live"
+  mkdir -p "$NC_DATA_DIR"
+  rsync -aHAX --numeric-ids "${SNAPSHOT_PATH}/data/ncdata/" "${NC_DATA_DIR}/"
+  chown -R www-data:www-data "$NC_DATA_DIR" || true
+  log "Data restore completed"
+  echo "Previous live data moved to: $backup_live"
+}
+
+service_cycle() {
+  log "Putting services into safer restore sequence"
+  systemctl stop nginx || true
+  docker stop "$COLLABORA_CONTAINER" || true
+  systemctl stop apache2 2>/dev/null || true
+  # php-fpm and mariadb remain available for db import
+}
+
+service_resume() {
+  log "Starting services again"
+  docker start "$COLLABORA_CONTAINER" || true
+  systemctl start nginx || true
+  systemctl reload nginx || true
+}
+
+post_checks() {
+  log "Post-restore checks"
+  systemctl is-active nginx || true
+  docker ps || true
+  curl -fsS http://127.0.0.1:9981/hosting/discovery | head || true
+}
+
+echo
+echo "cloudbak-restore"
+echo "This tool restores backups created by cloudbak."
+choose_snapshot
+
+echo
+echo "Chosen snapshot:"
+echo "  $SNAPSHOT_PATH"
+echo
+
+if [[ -f "${SNAPSHOT_PATH}/meta/SUMMARY.txt" ]]; then
+  echo "Snapshot summary:"
+  sed -n '1,20p' "${SNAPSHOT_PATH}/meta/SUMMARY.txt"
+  echo
+fi
+
+if ! confirm "Continue restore workflow"; then
+  echo "Cancelled."
+  exit 0
+fi
+
+service_cycle
+
+if confirm "Restore nginx configuration"; then
+  restore_nginx
+fi
+
+if confirm "Restore Nextcloud config.php"; then
+  restore_nextcloud_config
+fi
+
+if confirm "Restore selected operator scripts"; then
+  restore_scripts
+fi
+
+if confirm "Restore MariaDB database"; then
+  restore_database
+fi
+
+if confirm "Restore Nextcloud data directory snapshot"; then
+  restore_data
+fi
+
+service_resume
+post_checks
+
+echo
+echo "Restore workflow completed."
+echo "Manual recommendation:"
+echo "  1. Log in to Nextcloud"
+echo "  2. Open a document"
+echo "  3. Test Save as PDF"
+echo "  4. Check nginx and docker logs if anything looks off"
