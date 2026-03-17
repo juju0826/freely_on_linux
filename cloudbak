@@ -7,9 +7,13 @@
 #   - /etc/nginx/sites-available + sites-enabled
 #   - /var/www/nextcloud/config/config.php
 #   - Nextcloud database: nextcloud
-#   - Collabora container metadata
+#   - Collabora container metadata + coolwsd config + env + nginx myoffice config
 #   - Selected operator scripts under /home/libengju
 #   - Nextcloud data directory snapshot: /var/www/nextcloud-data/ncdata
+#
+# Optional:
+#   - If SAVE_COLLABORA_IMAGE=1 is set in the environment,
+#     also save the Collabora image as tar.gz
 #
 # Backup target:
 #   /var/www/nextcloud-data/cloudbak
@@ -41,6 +45,7 @@ NC_LOG_ROOT="/var/www/nextcloud-data"
 DB_NAME="nextcloud"
 DB_USER="ncuser"
 COLLABORA_CONTAINER="libengju-collabora"
+SAVE_COLLABORA_IMAGE="${SAVE_COLLABORA_IMAGE:-0}"
 
 SCRIPT_FILES=(
   "/home/libengju/collabora_watch.sh"
@@ -63,6 +68,75 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing command: $1"
 }
 
+backup_collabora_container() {
+  local collab_dir="$SNAPSHOT_DIR/docker/collabora"
+  local image_ref=""
+
+  mkdir -p "$collab_dir"
+
+  log "Backing up Collabora container metadata"
+
+  if ! docker ps -a --format '{{.Names}}' | grep -qx "$COLLABORA_CONTAINER"; then
+    warn "Collabora container not found, skipped: $COLLABORA_CONTAINER"
+    return 0
+  fi
+
+  image_ref="$(docker inspect -f '{{.Config.Image}}' "$COLLABORA_CONTAINER" 2>/dev/null || true)"
+
+  docker inspect "$COLLABORA_CONTAINER" > "$collab_dir/${COLLABORA_CONTAINER}.inspect.json" 2>/dev/null || true
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$COLLABORA_CONTAINER" > "$collab_dir/${COLLABORA_CONTAINER}.env.txt" 2>/dev/null || true
+  docker logs --tail 1000 "$COLLABORA_CONTAINER" > "$collab_dir/${COLLABORA_CONTAINER}.last1000.log" 2>&1 || true
+
+  docker exec "$COLLABORA_CONTAINER" cat /etc/coolwsd/coolwsd.xml > "$collab_dir/coolwsd.xml" 2>/dev/null || warn "Could not export /etc/coolwsd/coolwsd.xml"
+
+  printf '%s\n' "$image_ref" > "$collab_dir/image_ref.txt"
+  if [[ -n "$image_ref" ]]; then
+    docker image inspect "$image_ref" > "$collab_dir/image.inspect.json" 2>/dev/null || true
+  fi
+
+  if [[ -f /etc/nginx/sites-enabled/myoffice ]]; then
+    cp -a /etc/nginx/sites-enabled/myoffice "$collab_dir/nginx-myoffice.conf"
+  else
+    warn "Missing nginx myoffice config: /etc/nginx/sites-enabled/myoffice"
+  fi
+
+  cat > "$collab_dir/README.txt" <<README_EOF
+Collabora backup contents
+=========================
+
+Container name:
+$COLLABORA_CONTAINER
+
+Image reference:
+$image_ref
+
+Files:
+- ${COLLABORA_CONTAINER}.inspect.json : docker inspect output
+- ${COLLABORA_CONTAINER}.env.txt      : container environment variables
+- ${COLLABORA_CONTAINER}.last1000.log : recent container logs
+- coolwsd.xml                         : /etc/coolwsd/coolwsd.xml from inside container
+- image_ref.txt                       : current image reference
+- image.inspect.json                  : docker image inspect output
+- nginx-myoffice.conf                 : /etc/nginx/sites-enabled/myoffice
+
+Optional:
+- collabora-image.tar.gz              : docker save output when SAVE_COLLABORA_IMAGE=1
+
+Restore hints:
+1. Check nginx-myoffice.conf and env.txt first.
+2. If collabora-image.tar.gz exists, restore with:
+   docker load < collabora-image.tar.gz
+3. Recreate the container using image_ref.txt and env.txt as reference.
+README_EOF
+
+  if [[ "$SAVE_COLLABORA_IMAGE" == "1" && -n "$image_ref" ]]; then
+    log "Saving Collabora image archive (SAVE_COLLABORA_IMAGE=1)"
+    docker save "$image_ref" | gzip -1 > "$collab_dir/collabora-image.tar.gz"
+  fi
+
+  log "Collabora backup done"
+}
+
 for cmd in rsync tar mysqldump docker findmnt df du readlink gzip; do
   need_cmd "$cmd"
 done
@@ -82,6 +156,7 @@ mkdir -p "${SNAPSHOT_DIR}"/{configs,db,docker,scripts,meta,data}
   echo "database_name=${DB_NAME}"
   echo "database_user=${DB_USER}"
   echo "collabora_container=${COLLABORA_CONTAINER}"
+  echo "save_collabora_image=${SAVE_COLLABORA_IMAGE}"
   echo "hostname=$(hostname)"
   echo "kernel=$(uname -r)"
   echo "date=$(date --iso-8601=seconds)"
@@ -121,6 +196,8 @@ docker ps -a > "${SNAPSHOT_DIR}/docker/docker-ps-a.txt" || true
 docker images > "${SNAPSHOT_DIR}/docker/docker-images.txt" || true
 docker inspect "${COLLABORA_CONTAINER}" > "${SNAPSHOT_DIR}/docker/${COLLABORA_CONTAINER}.inspect.json" 2>/dev/null || warn "Could not inspect ${COLLABORA_CONTAINER}"
 docker logs --tail 200 "${COLLABORA_CONTAINER}" > "${SNAPSHOT_DIR}/docker/${COLLABORA_CONTAINER}.last200.log" 2>/dev/null || warn "Could not read ${COLLABORA_CONTAINER} logs"
+
+backup_collabora_container
 
 log "Backing up database"
 if sudo mysql -e "USE ${DB_NAME};" >/dev/null 2>&1; then
