@@ -31,7 +31,10 @@ Running free software on Linux in a way that is stable, predictable, and sustain
 ✅ 修改鍵盤的燈光邏輯，適用於 Keychron 所有的 K MAX 系列 ✅ 自動偵測鍵盤型號, 自選鍵盤為 RGB 或白光, 生成燈光程式, 編譯, 手動 DFU 後刷入 QMK 詳情請見 (https://jujublog.idv.tw/posts/20260313qmk/)
 ## upload_to_r2.sh
 ✅ 把音檔上傳至 Cloudflare R2 空間的腳本 詳情請見 (https://jujublog.idv.tw/posts/20251015r2/)
-## cloudbak.sh
-✅ 備份 Nextcloud 的重要設定，包含線上編輯 Collabora。依日期備份檔名。
-## cloudbak-restore
-✅ 還原 Nextcloud 的重要設定。
+## nextcloud_full_backup.sh
+✅ 備份 Nextcloud 的重要設定，共計三層：服務database、設定config、資料data，包含部份線上編輯 Collabora online，不含容器。依日期備份檔名。
+## nextcloud_restore_prepare.sh
+✅ 還原備份之前的檢查，包含是否安裝了服務，例如nginx,php等程式。
+## nextcloud_full_restore.sh
+✅ 還原 Nextcloud 完整的設定及資料，設定每週一凌晨自動備份，保留4天，超過則刪除最舊的備份。
+
