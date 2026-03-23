@@ -37,4 +37,6 @@ Running free software on Linux in a way that is stable, predictable, and sustain
 ✅ 還原備份之前的檢查，包含是否安裝了服務，例如nginx,php等程式。
 ## nextcloud_full_restore.sh
 ✅ 還原 Nextcloud 完整的設定及資料，設定每週一凌晨自動備份，保留4天，超過則刪除最舊的備份。
+## yt2media.sh
+✅ 可以在本機保存 Youtube影片，腳本可以選擇 mp3、mp4 兩種格式，中途輸入網址即可。
 
