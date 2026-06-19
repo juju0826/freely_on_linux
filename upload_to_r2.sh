@@ -4,7 +4,7 @@ set -euo pipefail
 # ===== 基本設定 =====
 REMOTE_NAME="r2"                                # rclone 遠端名稱
 BUCKET_NAME="media"                             # R2 bucket 名稱
-CUSTOM_DOMAIN="https://media.jujublog.idv.tw"   # 自訂網域
+CUSTOM_DOMAIN="https://XXXXXXX"                 # 填入自訂網域
 CACHE_CONTROL_DEFAULT="public, max-age=31536000, immutable"
 LAST_CATEGORY_FILE="$HOME/.upload_to_r2_last_category"
 
